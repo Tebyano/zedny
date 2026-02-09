@@ -3,55 +3,23 @@ from pydantic import BaseModel
 from typing import List, Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from psycopg2 import sql, Error as PGError
-
-# =========================
-
-# =========================
-SUPERUSER_CONFIG = {
-    "host": "localhost",
-    "dbname": "postgres",
-    "user": "admin",
-    "password": "12345",
-    "port": 5432
-}
-
-DB_NAME = "inventory_db"
-
-# =========================
-# 
-# =========================
-def create_database():
-    conn = psycopg2.connect(**SUPERUSER_CONFIG)
-    conn.autocommit = True
-    cursor = conn.cursor()
-    cursor.execute(
-        sql.SQL("SELECT 1 FROM pg_database WHERE datname = %s"), [DB_NAME]
-    )
-    exists = cursor.fetchone()
-    if not exists:
-        cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(DB_NAME)))
-        print(f"Database '{DB_NAME}' created.")
-    cursor.close()
-    conn.close()
-
-create_database()
+from psycopg2 import sql
 
 # =========================
 
 # =========================
 DATABASE_CONFIG = {
     "host": "localhost",
-    "dbname": "mydb",   # 
-    "user": "admin",
-    "password": "12345",
+    "dbname": "mydatabase",
+    "user": "tebyan",
+    "password": "secret123",
     "port": 5432
 }
 
-app = FastAPI(title="FastAPI + PostgreSQL CRUD - Products")
+app = FastAPI(title="FastAPI + PostgreSQL CRUD - Users & Items")
 
 # =========================
-# DB CONNECTION
+
 # =========================
 def get_db():
     conn = psycopg2.connect(**DATABASE_CONFIG)
@@ -60,97 +28,125 @@ def get_db():
     finally:
         conn.close()
 
-# ======================
 # =========================
-def create_table():
+
+# =========================
+def create_tables():
     conn = psycopg2.connect(**DATABASE_CONFIG)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS products (
+    
+  
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
-            product_name VARCHAR(200) NOT NULL,
-            quantity INT DEFAULT 0
-        );
-        """
-    )
+            user_name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) NOT NULL
+        )
+    """)
+
+ 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS items (
+            item_id SERIAL PRIMARY KEY,
+            item_name VARCHAR(255) NOT NULL
+        )
+    """)
+
+    
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_item (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            item_id INT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (item_id) REFERENCES items(item_id) ON DELETE CASCADE
+        )
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
+    print("All tables created successfully!")
 
-create_table()
+create_tables()
 
 # =========================
 # Pydantic Schemas
 # =========================
-class ProductCreate(BaseModel):
-    product_name: str
-    quantity: Optional[int] = 0
+class UserCreate(BaseModel):
+    user_name: str
+    email: str
 
-class ProductResponse(ProductCreate):
+class UserResponse(UserCreate):
     id: int
+
+class ItemCreate(BaseModel):
+    item_name: str
+
+class ItemResponse(ItemCreate):
+    item_id: int
+
+class UserItemCreate(BaseModel):
+    user_id: int
+    item_id: int
 
 # =========================
 # CRUD Endpoints
 # =========================
 
-# CREATE
-@app.post("/products", response_model=ProductResponse)
-def create_product(product: ProductCreate, db=Depends(get_db)):
+# USERS
+@app.post("/users", response_model=UserResponse)
+def create_user(user: UserCreate, db=Depends(get_db)):
     cursor = db.cursor(cursor_factory=RealDictCursor)
     cursor.execute(
-        """
-        INSERT INTO products (product_name, quantity)
-        VALUES (%s, %s)
-        RETURNING id, product_name, quantity
-        """,
-        (product.product_name, product.quantity)
+        "INSERT INTO users (user_name, email) VALUES (%s, %s) RETURNING id, user_name, email",
+        (user.user_name, user.email)
     )
     db.commit()
     return cursor.fetchone()
 
-# READ ALL
-@app.get("/products", response_model=List[ProductResponse])
-def read_products(db=Depends(get_db)):
+@app.get("/users", response_model=List[UserResponse])
+def read_users(db=Depends(get_db)):
     cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM products")
+    cursor.execute("SELECT * FROM users")
     return cursor.fetchall()
 
-# READ ONE
-@app.get("/products/{product_id}", response_model=ProductResponse)
-def read_product(product_id: int, db=Depends(get_db)):
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM products WHERE id = %s", (product_id,))
-    product = cursor.fetchone()
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return product
-
-# UPDATE
-@app.put("/products/{product_id}", response_model=ProductResponse)
-def update_product(product_id: int, product: ProductCreate, db=Depends(get_db)):
+# ITEMS
+@app.post("/items", response_model=ItemResponse)
+def create_item(item: ItemCreate, db=Depends(get_db)):
     cursor = db.cursor(cursor_factory=RealDictCursor)
     cursor.execute(
-        """
-        UPDATE products
-        SET product_name = %s, quantity = %s
-        WHERE id = %s
-        RETURNING id, product_name, quantity
-        """,
-        (product.product_name, product.quantity, product_id)
+        "INSERT INTO items (item_name) VALUES (%s) RETURNING item_id, item_name",
+        (item.item_name,)
     )
-    updated = cursor.fetchone()
-    if not updated:
-        raise HTTPException(status_code=404, detail="Product not found")
     db.commit()
-    return updated
+    return cursor.fetchone()
 
-# DELETE
-@app.delete("/products/{product_id}")
-def delete_product(product_id: int, db=Depends(get_db)):
+@app.get("/items", response_model=List[ItemResponse])
+def read_items(db=Depends(get_db)):
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM items")
+    return cursor.fetchall()
+
+# USER_ITEM
+@app.post("/user_item")
+def assign_item(user_item: UserItemCreate, db=Depends(get_db)):
     cursor = db.cursor()
-    cursor.execute("DELETE FROM products WHERE id = %s RETURNING id", (product_id,))
-    if not cursor.fetchone():
-        raise HTTPException(status_code=404, detail="Product not found")
+    cursor.execute(
+        "INSERT INTO user_item (user_id, item_id) VALUES (%s, %s) RETURNING user_id, item_id",
+        (user_item.user_id, user_item.item_id)
+    )
     db.commit()
-    return {"message": "Product deleted"}
+    return {"user_id": user_item.user_id, "item_id": user_item.item_id}
+
+@app.get("/user_item")
+def get_user_items(db=Depends(get_db)):
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT ui.user_id, u.user_name, ui.item_id, i.item_name
+        FROM user_item ui
+        JOIN users u ON ui.user_id = u.id
+        JOIN items i ON ui.item_id = i.item_id
+    """)
+    return cursor.fetchall()
