@@ -1,19 +1,18 @@
-def assign_item_to_user(db, user_id: int, item_id: int) -> dict:
-    cursor = db.cursor()
-    cursor.execute(
-        "INSERT INTO user_item (user_id, item_id) VALUES (%s, %s) RETURNING user_id, item_id",
-        (user_id, item_id)
-    )
-    db.commit()
-    row = cursor.fetchone()
-    return {"user_id": row[0], "item_id": row[1]}
+from sqlalchemy.orm import Session
+from app.models.user_model import User
+from app.models.item_model import Item
+from app.models.user_item_model import UserItem
 
-def get_all_user_items(db) -> list:
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("""
-        SELECT ui.user_id, u.user_name, ui.item_id, i.item_name
-        FROM user_item ui
-        JOIN users u ON ui.user_id = u.id
-        JOIN items i ON ui.item_id = i.item_id
-    """)
-    return cursor.fetchall()
+class UserItemRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def assign_item_to_user(self, user_id: int, item_id: int) -> UserItem:
+        assignment = UserItem(user_id=user_id, item_id=item_id)
+        self.db.add(assignment)
+        self.db.commit()
+        self.db.refresh(assignment)
+        return assignment
+
+    def get_all_user_items(self):
+        return self.db.query(UserItem).all()

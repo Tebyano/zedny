@@ -1,8 +1,11 @@
 from fastapi import FastAPI
-from app.routers import users, items, user_items
+from app.routers import users, items, user_items, auth, llm
 
-app = FastAPI(title="FastAPI + PostgreSQL CRUD - Users & Items")
+app = FastAPI(title="FFirst API", version="0.1.0")
 
-app.include_router(users.router)
-app.include_router(items.router)
-app.include_router(user_items.router)
+# تسجيل الراوترات
+app.include_router(users.router, prefix="/api")
+app.include_router(items.router, prefix="/api")
+app.include_router(user_items.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(llm.router)  # هنا اللجوء لراوتر LLM

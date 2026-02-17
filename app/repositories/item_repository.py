@@ -1,15 +1,16 @@
-from psycopg2.extras import RealDictCursor
+from sqlalchemy.orm import Session
+from app.models.item_model import Item
 
-def create_item(db, item_name: str) -> dict:
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute(
-        "INSERT INTO items (item_name) VALUES (%s) RETURNING item_id, item_name",
-        (item_name,)
-    )
-    db.commit()
-    return cursor.fetchone()
+class ItemRepository:
+    def __init__(self, db: Session):
+        self.db = db
 
-def get_all_items(db) -> list:
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT item_id, item_name FROM items")
-    return cursor.fetchall()
+    def create_item(self, item_name: str) -> Item:
+        new_item = Item(item_name=item_name)
+        self.db.add(new_item)
+        self.db.commit()
+        self.db.refresh(new_item)
+        return new_item
+
+    def get_all_items(self) -> list[Item]:
+        return self.db.query(Item).all()
