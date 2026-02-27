@@ -1,8 +1,26 @@
-from app.repositories.user_repository import create_user, get_all_users
-from app.schemas.user import UserCreate, UserResponse
+from sqlalchemy.orm import Session
+from app.schemas.user import UserCreate
+from app.repositories.user_repository import UserRepository
+from app.core.auth_utils import hash_password
 
-def create_new_user(db, user: UserCreate) -> UserResponse:
-    return UserResponse(**create_user(db, user.user_name, user.email))
 
-def get_users(db) -> list[UserResponse]:
-    return [UserResponse(**u) for u in get_all_users(db)]
+class UserService:
+    def __init__(self, db: Session):
+        self.repo = UserRepository(db)
+
+    def create_new_user(self, user: UserCreate):
+        hashed_pwd = hash_password(user.password)
+        return self.repo.create_user(
+            username=user.username,
+            email=user.email,
+            hashed_password=hashed_pwd
+        )
+
+    def get_user(self, user_id: int):
+        return self.repo.get_by_id(user_id)
+
+    def get_user_by_email(self, email: str):
+        return self.repo.get_by_email(email)
+
+    def get_all_users(self):
+        return self.repo.get_all()
