@@ -1,11 +1,11 @@
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.orm import Session
 from uuid import UUID, uuid4
 
-from app.database import get_db, SessionLocal
+from app.database import get_db
 from app.core.auth_utils import get_current_user
 
 from app.client.llm_client import cohere_client
@@ -18,7 +18,13 @@ from app.models.chat_model import Conversation, Message
 from app.models.embedding_model import MessageEmbedding
 
 from app.models.video_model import Video, VideoChunk
-from app.schemas.video import IngestVideoResponse, VideoOut, SearchVideoRequest, SearchVideoResponse, SearchHit
+from app.schemas.video import (
+    IngestVideoResponse,
+    VideoOut,
+    SearchVideoRequest,
+    SearchVideoResponse,
+    SearchHit,
+)
 from app.services.video_ingest_service import process_video_ingest
 
 from app.schemas.llm import (
@@ -38,6 +44,27 @@ router = APIRouter(prefix="/llm", tags=["LLM"])
 
 EMBED_MODEL = "embed-english-v3.0"
 EMBED_DIMS = 1024
+
+
+def normalize_youtube_url(url: str) -> str:
+    url = (url or "").strip()
+
+    # remove playlist/radio params
+    for key in ["&list=", "?list=", "&start_radio=", "&index=", "&pp="]:
+        if key in url:
+            url = url.split(key)[0]
+
+    # youtu.be/<id>
+    if "youtu.be/" in url:
+        vid = url.split("youtu.be/")[1].split("?")[0].split("&")[0]
+        url = f"https://www.youtube.com/watch?v={vid}"
+
+    # youtube.com/shorts/<id>
+    if "/shorts/" in url:
+        vid = url.split("/shorts/")[1].split("?")[0].split("&")[0].split("/")[0]
+        url = f"https://www.youtube.com/watch?v={vid}"
+
+    return url
 
 
 @router.post("/generate", response_model=LLMResponse)
@@ -273,13 +300,8 @@ async def upload_image_endpoint(
     )
 
 
-# =========================
-# ✅ VIDEO INGEST ENDPOINTS
-# =========================
-
 @router.post("/ingest-video", response_model=IngestVideoResponse)
 async def ingest_video_endpoint(
-    background_tasks: BackgroundTasks,
     youtube_url: str | None = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
@@ -288,11 +310,15 @@ async def ingest_video_endpoint(
     if (not youtube_url and not file) or (youtube_url and file):
         raise HTTPException(status_code=400, detail="Send either youtube_url OR file")
 
+    if youtube_url:
+        youtube_url = normalize_youtube_url(youtube_url)
+
     video = Video(
         user_id=current_user.id,
         source_type="youtube" if youtube_url else "upload",
         source_url=youtube_url,
         status="processing",
+        error=None,
     )
     db.add(video)
     db.commit()
@@ -301,58 +327,87 @@ async def ingest_video_endpoint(
     tmp_path = None
     filename = None
 
-    if file:
-        filename = file.filename
-        suffix = os.path.splitext(filename or "")[1] or ".mp4"
-        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-        os.close(fd)
-        content = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(content)
+    try:
+        if file:
+            filename = file.filename
+            suffix = os.path.splitext(filename or "")[1] or ".mp4"
+            fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+            os.close(fd)
 
-    def job():
-        s = SessionLocal()
-        try:
-            process_video_ingest(
-                db=s,
-                video_id=video.id,
-                user_id=current_user.id,
-                source_type=video.source_type,
-                youtube_url=youtube_url,
-                uploaded_video_path=tmp_path,
-                uploaded_filename=filename,
-            )
-        finally:
-            s.close()
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            wrote_any = False
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = await file.read(1024 * 1024)  # 1MB
+                    if not chunk:
+                        break
+                    wrote_any = True
+                    f.write(chunk)
 
-    background_tasks.add_task(job)
-    return IngestVideoResponse(video_id=video.id, status="processing")
+            if not wrote_any:
+                video.status = "error"
+                video.error = "Empty video file"
+                db.commit()
+                raise HTTPException(status_code=400, detail="Empty video file")
+
+        v, chunks_count = process_video_ingest(
+            db=db,
+            video_id=video.id,
+            user_id=current_user.id,
+            source_type=video.source_type,
+            youtube_url=youtube_url,
+            uploaded_video_path=tmp_path,
+            uploaded_filename=filename,
+        )
+
+        return IngestVideoResponse(
+            video_id=v.id,
+            status=v.status,
+            source_type=v.source_type,
+            source_url=v.source_url,
+            storage_url=v.storage_url,
+            title=v.title,
+            description=v.description,
+            duration_seconds=v.duration_seconds,
+            transcript=v.transcript,
+            chunks_count=chunks_count,
+            error=v.error,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        video.status = "error"
+        video.error = str(e)
+        db.commit()
+        raise HTTPException(status_code=500, detail="Video ingest failed")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
-@router.get("/videos/{video_id}", response_model=VideoOut)
-def get_video_endpoint(
-    video_id: UUID,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    v = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
-    if not v:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    return VideoOut(
-        video_id=v.id,
-        status=v.status,
-        source_type=v.source_type,
-        source_url=v.source_url,
-        storage_url=v.storage_url,
-        title=v.title,
-        description=v.description,
-        duration_seconds=v.duration_seconds,
-        transcript=v.transcript,
-        error=v.error,
-    )
+# (اختياري) لو محتاجه رجعه
+# @router.get("/videos/{video_id}", response_model=VideoOut)
+# def get_video_endpoint(
+#     video_id: UUID,
+#     db: Session = Depends(get_db),
+#     current_user=Depends(get_current_user),
+# ):
+#     v = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+#     if not v:
+#         raise HTTPException(status_code=404, detail="Video not found")
+#
+#     return VideoOut(
+#         video_id=v.id,
+#         status=v.status,
+#         source_type=v.source_type,
+#         source_url=v.source_url,
+#         storage_url=v.storage_url,
+#         title=v.title,
+#         description=v.description,
+#         duration_seconds=v.duration_seconds,
+#         transcript=v.transcript,
+#         error=v.error,
+#     )
 
 
 @router.post("/videos/search", response_model=SearchVideoResponse)

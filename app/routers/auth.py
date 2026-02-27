@@ -10,7 +10,7 @@ from app.core.auth_utils import (
     hash_password,
     verify_password,
     create_access_token,
-    get_current_user,  # <-- دي الآن بتستخدم HTTPBearer
+    get_current_user,  
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -51,7 +51,6 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
             hashed_password=hashed_pwd,
         )
     except IntegrityError:
-        # مهم: في حال حصل خطأ قبل ما الـ repository يعمل rollback
         db.rollback()
         raise HTTPException(status_code=409, detail="Email or username already exists")
 
@@ -76,10 +75,10 @@ def login(credentials: UserLogin = Body(...), db: Session = Depends(get_db)):
     return {"user": user, "access_token": token, "token_type": "bearer"}
 
 
-@router.get("/me")
-def me(current_user=Depends(get_current_user)):
-    return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "email": current_user.email,
-    }
+# @router.get("/me")
+# def me(current_user=Depends(get_current_user)):
+#     return {
+#         "id": current_user.id,
+#         "username": current_user.username,
+#         "email": current_user.email,
+#     }
