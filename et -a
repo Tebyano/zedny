@@ -1,0 +1,5 @@
+ current_database |            inet_server_addr             |                                      version                                       
+------------------+-----------------------------------------+------------------------------------------------------------------------------------
+ postgres         | 2a05:d018:135e:169e:1b7a:e253:5d51:2016 | PostgreSQL 17.6 on aarch64-unknown-linux-gnu, compiled by gcc (GCC) 13.2.0, 64-bit
+(1 row)
+
